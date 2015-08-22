@@ -1,48 +1,76 @@
 package main
 
 import (
-	"path"
-	"os"
-	"fmt"
 	"flag"
-	"strings"
-	"io/ioutil"
+	"fmt"
 	log "github.com/Sirupsen/logrus"
+	"html/template"
+	"io/ioutil"
 	"net/http"
+	"os"
+	"path"
+	"strings"
 )
 
 const (
-	message string = "static-server is starting on the port: %v"
-	listenport string = ":%v"
+	message              string = "static-server is starting on the port: %v"
+	listenport           string = ":%v"
+	baseTemplatePath     string = "template/base.html"
+	showDirTemplatePath  string = "template/dir.html"
+	notFoundTemplatePath string = "template/404.html"
 )
+
+var showDirTemplate *template.Template
+var notFoundTemplate *template.Template
 
 func handler(w http.ResponseWriter, r *http.Request) {
 
 	pathname := strings.Trim(r.URL.Path, "/")
-	wd, error := os.Getwd()
+	wd, err := os.Getwd()
 
-	if error != nil {
-		log.Fatal(error)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	files, error := ioutil.ReadDir(wd)
-
-	if error != nil {
-		log.Fatal(error)
+	if pathname == "" {
+		ShowDir(w, wd)
+		return
 	}
 
-	for _, file := range files {
+	paths := strings.Split(pathname, "/")
 
-		filename := file.Name()
-		basename := path.Base(filename)
+	for i, v := range paths {
 
-		if strings.Contains(basename, pathname) {
+		isLast := len(paths) == i+1
+
+		fileInfos, err := ioutil.ReadDir(wd)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, file := range fileInfos {
+
+			filename := file.Name()
+			basename := path.Base(filename)
+
+			if basename != v {
+				continue
+			}
+
+			if file.IsDir() {
+				wd = fmt.Sprintf("%s/%s", wd, v)
+				if isLast {
+					ShowDir(w, wd)
+					return
+				}
+				break
+			}
 
 			fullpath := path.Join(wd, filename)
-			data, error := ioutil.ReadFile(fullpath)
+			data, err := ioutil.ReadFile(fullpath)
 
-			if error != nil {
-				log.Fatal(error)
+			if err != nil {
+				log.Fatal(err)
 				return
 			}
 
@@ -50,11 +78,43 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	NotFound(w)
+}
+
+func ShowDir(w http.ResponseWriter, wd string) {
+	fileInfos, err := ioutil.ReadDir(wd)
+	if err != nil {
+		log.Fatal(err)
+	}
+	list := make([]string, len(fileInfos))
+	for i, file := range fileInfos {
+		filename := file.Name()
+		basename := path.Base(filename)
+		if file.IsDir() {
+			basename += "/"
+		}
+		list[i] = basename
+	}
+	data := struct {
+		Title string
+		Items []string
+	}{
+		Title: fmt.Sprintf("Directory listing for %s/", wd),
+		Items: list,
+	}
+	showDirTemplate.ExecuteTemplate(w, "base", data)
+}
+
+func NotFound(w http.ResponseWriter) {
+	notFoundTemplate.ExecuteTemplate(w, "base", nil)
 }
 
 func init() {
 	log.SetLevel(log.InfoLevel)
 	log.SetOutput(os.Stdout)
+
+	showDirTemplate, _ = template.ParseFiles(baseTemplatePath, showDirTemplatePath)
+	notFoundTemplate, _ = template.ParseFiles(baseTemplatePath, notFoundTemplatePath)
 }
 
 func main() {
